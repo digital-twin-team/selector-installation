@@ -5,14 +5,15 @@ on its own; `install-all.sh` chains them and `--from N` resumes after a fix.
 
 | Step | Script | What it does |
 |------|--------|--------------|
-| 0 | `00-preflight.sh` | Arch/OS/sudo/terminal checks, RAM/disk/CPU report, apt lock, snap-docker check, kernel sysctls (asks before writing), outbound reachability. |
-| 1 | `01-install-tools.sh` | apt packages, gcloud CLI, docker-ce (adds you to the `docker` group), pinned kubectl/kind/kustomize/helm/spruce/yaml2json/yq with checksum verification. Best-effort: probes the download hosts first, skips tools whose host is blocked or whose install fails, and ends with a summary of installed / missing tools and unreachable hosts (also saved to `~/.s2ctl/install-report.txt`). Re-run after fixing the network; installed tools are skipped. |
+| 0 | `00-preflight.sh` | Arch/OS/sudo/terminal checks, RAM/disk/CPU report, apt lock, snap-docker check, kernel sysctls (asks before writing), outbound reachability. Every line shows the command it ran and the result, and the failures are repeated at the end. |
+| 1 | `01-install-tools.sh` | apt packages, gcloud CLI, docker-ce (adds you to the `docker` group), pinned kubectl/kind/kustomize/helm/spruce/yaml2json/yq with checksum verification. Best-effort: probes the download hosts first, skips tools whose host is blocked or whose install fails, and ends with a summary that shows, per tool, the command proving it works (`works: kubectl version --client -> v1.32.4`) or the exact command that failed plus the download it needs (`failed: curl -fsSL https://... -> (28) Connection timed out`). Also saved to `~/.s2ctl/install-report.txt`. Re-run after fixing the network; installed tools are skipped. |
 | 2 | `02-configure.sh` | Key paths, deploy dir, FQDN and overrides -> `~/.s2ctl/config` (0600). Copies the GCP key to the path the kind node mounts. For remote installs, isolates the target context into `~/.s2ctl/kubeconfig`. |
 | 3 | `03-download-specs.sh` | Service-account login, downloads and extracts the specs tarball from the vendor bucket, applies `S2_INSTANCE` / `S2_NAME` / FQDN ingress-domain overrides to `config.properties`. |
 | 4 | `04-create-kind-cluster.sh` | Host directories from the vendor kind config, `kind create cluster`, dedicated kubeconfig. Skipped for remote installs. |
 | 5 | `05-prepare-cluster.sh` | Verifies the target cluster (typed confirmation if it already runs a different deployment), namespaces, GPG key secret, registry pull secret per namespace, optional CoreDNS config. |
 | 6 | `06-deploy-apps.sh` | Platform apps in the vendor's order with the vendor's special cases. `--list`, `--only APP`, `--from APP`, `--timeout SEC`. |
 | 7 | `07-deploy-s2ap.sh` | Applies s2ap and waits (`--wait MIN`, default 30). |
+| — | `99-netdiag.sh` | Read-only network diagnostic: tests every download host as you, with proxy settings stripped, and via sudo; shows the proxy settings in play and prints a verdict (DNS / proxy / user-vs-root / closed egress). Run it whenever step 0 or 1 reports blocked hosts. |
 | 8 | `08-fetch-s2ctl-tools.sh` | Optional. Pulls the `s2ctl` binary, `get_reports.py` and the s2ml specs out of the running deployment (what `s2ctl.sh gets2mspecs` does). |
 
 ## If you can only commit files (no shell on the VM)

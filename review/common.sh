@@ -17,6 +17,7 @@ unset _here
 S2CTL_CONFIG="${S2CTL_CONFIG:-$HOME/.s2ctl/config}"
 S2CTL_DIR="$(dirname "$S2CTL_CONFIG")"
 export KUBECONFIG="$S2CTL_DIR/kubeconfig"
+export CLOUDSDK_CORE_DISABLE_USAGE_REPORTING=true CLOUDSDK_COMPONENT_MANAGER_DISABLE_UPDATE_CHECK=true
 
 DOCKER_REGISTRY="us-central1-docker.pkg.dev"
 SPECS_BUCKET_PREFIX="s2-deployment"
@@ -162,12 +163,35 @@ confirm_typed() {
   [[ $ans == "$2" ]]
 }
 
-# ---------------------------------------------------------------- downloads
-fetch() { curl -fsSL --retry 3 --proto '=https' -o "$2" "$1"; }   # fetch URL DEST ; fails loudly on HTTP errors
+# ---------------------------------------------------------------- running commands, downloads, probes
+# Every failure is recorded as "COMMAND -> reason" in $TMPD/last-fail so the summaries can show it verbatim.
+cmd_str() { local s="$*"; s=${s#sudo --preserve-env=* }; printf '%s' "$s"; }
+
+# try CMD... -> runs CMD with live output; on failure records "CMD -> exit N: <last output line>" and returns N
+try() {
+  local rc=0 log="${TMPD:-/tmp}/cmd.log"
+  { "$@" 2>&1 | tee "$log"; rc=${PIPESTATUS[0]}; } || true
+  if (( rc )); then
+    printf '%s -> exit %s: %s\n' "$(cmd_str "$@")" "$rc" "$(tail -n1 "$log" | cut -c1-140)" > "${TMPD:-/tmp}/last-fail"
+    return "$rc"
+  fi
+}
+
+# fetch URL DEST -> curl with timeouts; on failure records "curl -fsSL URL -> reason" and returns 1
+fetch() {
+  local url=$1 dest=$2 err
+  if ! err=$(curl -fsSL --connect-timeout 15 --max-time 600 --retry 2 --retry-delay 3 --proto '=https' -o "$dest" "$url" 2>&1); then
+    err=$(printf '%s\n' "$err" | grep -m1 'curl:' | sed -E 's/^curl: //; s/ after [0-9]+ milliseconds//' | cut -c1-100)
+    printf 'curl -fsSL %s -> %s\n' "$url" "${err:-failed}" > "${TMPD:-/tmp}/last-fail"
+    warn "download failed: $url -> ${err:-failed}"
+    return 1
+  fi
+}
+
 sha256_of() { sha256sum "$1" | awk '{print $1}'; }
 first_sha256_in() { grep -oE '[0-9a-f]{64}' "$1" | head -n1 || true; }   # .sha256, .sha256sum, checksums lines
 
-# verify_sha256 FILE EXPECTED LABEL  -> dies on mismatch; with EXPECTED empty prints the hash so it can be pinned
+# verify_sha256 FILE EXPECTED LABEL -> dies on mismatch; with EXPECTED empty prints the hash so it can be pinned
 verify_sha256() {
   local file=$1 expected=$2 label=$3 actual
   actual=$(sha256_of "$file")
@@ -175,8 +199,34 @@ verify_sha256() {
     warn "$label: no checksum to verify against; downloaded sha256=$actual (pin it in versions.env)"
     return 0
   fi
-  [[ $actual == "$expected" ]] || die "$label: sha256 mismatch (expected $expected, got $actual)"
+  if [[ $actual != "$expected" ]]; then
+    printf 'sha256sum %s -> mismatch: expected %s got %s\n' "$(basename "$file")" "$expected" "$actual" > "${TMPD:-/tmp}/last-fail"
+    die "$label: sha256 mismatch (expected $expected, got $actual)"
+  fi
   info "$label: sha256 verified"
+}
+
+PROBE_CMD='curl -sS --max-time 10 https://%s/'
+# probe_host HOST -> prints "HTTP <code>" (exit 0) or the curl failure reason (exit 1), 10 s max
+probe_host() {
+  local code err errf="${TMPD:-/tmp}/probe.$1.err"
+  code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "https://$1/" 2>"$errf" || true)
+  if [[ -n $code && $code != 000 ]]; then printf 'HTTP %s' "$code"; return 0; fi
+  err=$(head -n1 "$errf" | sed -E 's/^curl: //; s/ after [0-9]+ milliseconds//' | cut -c1-80)
+  printf '%s' "${err:-no answer}"
+  return 1
+}
+reachable() { probe_host "$1" >/dev/null; }
+
+# require_reachable HOST... -> dies listing every host that cannot be reached, with the probe command and reason
+require_reachable() {
+  local h r blocked=()
+  for h in "$@"; do
+    if ! r=$(probe_host "$h"); then blocked+=("$(printf "$PROBE_CMD" "$h") -> $r"); fi
+  done
+  (( ${#blocked[@]} == 0 )) && return 0
+  printf '%s\n' "${blocked[@]}" >&2
+  die "${#blocked[@]} host(s) unreachable (egress is blocked or needs proxy.env; run: bash 99-netdiag.sh)"
 }
 
 # ---------------------------------------------------------------- GCP

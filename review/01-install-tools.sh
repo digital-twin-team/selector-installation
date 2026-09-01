@@ -53,8 +53,25 @@ declare -A TOOL_WANT=(
   [kubectl]=$KUBECTL_VERSION [kind]=$KIND_VERSION [kustomize]=$KUSTOMIZE_VERSION [helm]=$HELM_VERSION
   [spruce]=$SPRUCE_VERSION [yaml2json]=$YAML2JSON_VERSION [yq]=$YQ_VERSION
 )
-declare -A WHY=()       # tool -> reason it is not installed
+declare -A CHECK_CMD=(
+  [gcloud]="gcloud version" [docker]="docker --version" [kubectl]="kubectl version --client" [kind]="kind version"
+  [kustomize]="kustomize version" [helm]="helm version --template {{.Version}}" [spruce]="spruce --version"
+  [yaml2json]="yaml2json -version" [yq]="yq --version"
+)
+declare -A TOOL_URL=(
+  [gcloud]="https://packages.cloud.google.com/apt (apt repo) + https://packages.cloud.google.com/apt/doc/apt-key.gpg"
+  [docker]="https://download.docker.com/linux/$OS_ID (apt repo) + https://download.docker.com/linux/$OS_ID/gpg"
+  [kubectl]="https://dl.k8s.io/release/$KUBECTL_VERSION/bin/linux/$ARCH/kubectl (+ .sha256)"
+  [kind]="https://kind.sigs.k8s.io/dl/$KIND_VERSION/kind-linux-$ARCH (+ .sha256sum)"
+  [kustomize]="https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/$KUSTOMIZE_VERSION/kustomize_${KUSTOMIZE_VERSION}_linux_${ARCH}.tar.gz (+ checksums.txt)"
+  [helm]="https://get.helm.sh/helm-$HELM_VERSION-linux-$ARCH.tar.gz (+ .sha256sum)"
+  [spruce]="https://github.com/geofffranks/spruce/releases/download/v$SPRUCE_VERSION/spruce-linux-$ARCH"
+  [yaml2json]="https://github.com/wakeful/yaml2json/releases/download/$YAML2JSON_VERSION/yaml2json-linux-$ARCH"
+  [yq]="https://github.com/mikefarah/yq/releases/download/$YQ_VERSION/yq_linux_$ARCH"
+)
+declare -A WHY=()       # tool -> "COMMAND -> reason" it is not installed
 declare -A BLOCKED=()   # host -> 1 when the probe could not reach it
+declare -A PROBE_RESULT=()   # host -> "HTTP 200" or the curl failure reason
 
 installed_version() {
   case $1 in
@@ -88,34 +105,34 @@ tool_state() {
 
 # ---------------------------------------------------------------- sections (each runs in a subshell; a failure
 # inside only aborts that section)
-install_bin() { "${SUDO[@]}" install -o root -g root -m 0755 "$1" "$BIN_DIR/$2"; info "installed $BIN_DIR/$2"; }
+install_bin() { try "${SUDO[@]}" install -o root -g root -m 0755 "$1" "$BIN_DIR/$2"; info "installed $BIN_DIR/$2"; }
 
 section_apt() {
   # a previous failed run may have left half-written repo files behind; drop the ones this step recreates
-  command -v gcloud >/dev/null 2>&1 || "${SUDO[@]}" rm -f /etc/apt/sources.list.d/google-cloud-sdk.list
-  command -v docker >/dev/null 2>&1 || "${SUDO[@]}" rm -f /etc/apt/sources.list.d/docker.list
-  "${SUDO[@]}" timeout 300 apt-get update -q
-  "${SUDO[@]}" timeout 900 apt-get install -y -q apt-transport-https ca-certificates gnupg sed tar gawk jq curl lsb-release git coreutils
+  command -v gcloud >/dev/null 2>&1 || try "${SUDO[@]}" rm -f /etc/apt/sources.list.d/google-cloud-sdk.list
+  command -v docker >/dev/null 2>&1 || try "${SUDO[@]}" rm -f /etc/apt/sources.list.d/docker.list
+  try "${SUDO[@]}" timeout 300 apt-get update -q
+  try "${SUDO[@]}" timeout 900 apt-get install -y -q apt-transport-https ca-certificates gnupg sed tar gawk jq curl lsb-release git coreutils
 }
 
 section_gcloud() {
   fetch https://packages.cloud.google.com/apt/doc/apt-key.gpg "$TMPD/gcloud.gpg"
-  "${SUDO[@]}" gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg "$TMPD/gcloud.gpg"
-  echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
-    | "${SUDO[@]}" tee /etc/apt/sources.list.d/google-cloud-sdk.list >/dev/null
-  "${SUDO[@]}" timeout 300 apt-get update -q
-  "${SUDO[@]}" timeout 900 apt-get install -y -q google-cloud-cli
+  try "${SUDO[@]}" gpg --dearmor --yes -o /usr/share/keyrings/cloud.google.gpg "$TMPD/gcloud.gpg"
+  echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" > "$TMPD/google-cloud-sdk.list"
+  try "${SUDO[@]}" install -m 0644 "$TMPD/google-cloud-sdk.list" /etc/apt/sources.list.d/google-cloud-sdk.list
+  try "${SUDO[@]}" timeout 300 apt-get update -q
+  try "${SUDO[@]}" timeout 900 apt-get install -y -q google-cloud-cli
 }
 
 section_docker() {
-  "${SUDO[@]}" install -d -m 0755 /etc/apt/keyrings
+  try "${SUDO[@]}" install -d -m 0755 /etc/apt/keyrings
   fetch "https://download.docker.com/linux/$OS_ID/gpg" "$TMPD/docker.asc"
-  "${SUDO[@]}" install -m 0644 "$TMPD/docker.asc" /etc/apt/keyrings/docker.asc
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$OS_ID $CODENAME stable" \
-    | "${SUDO[@]}" tee /etc/apt/sources.list.d/docker.list >/dev/null
-  "${SUDO[@]}" timeout 300 apt-get update -q
-  "${SUDO[@]}" timeout 900 apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-  "${SUDO[@]}" usermod -aG docker "$(id -un)"
+  try "${SUDO[@]}" install -m 0644 "$TMPD/docker.asc" /etc/apt/keyrings/docker.asc
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$OS_ID $CODENAME stable" > "$TMPD/docker.list"
+  try "${SUDO[@]}" install -m 0644 "$TMPD/docker.list" /etc/apt/sources.list.d/docker.list
+  try "${SUDO[@]}" timeout 300 apt-get update -q
+  try "${SUDO[@]}" timeout 900 apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  try "${SUDO[@]}" usermod -aG docker "$(id -un)"
 }
 
 section_kubectl() {
@@ -180,29 +197,42 @@ for t in "${TOOLS[@]}"; do
 done
 if (( ${#hosts[@]} )); then
   log "Step 1: probing ${#hosts[@]} download host(s), 10 s each, in parallel"
-  for h in "${hosts[@]}"; do ( reachable "$h" && touch "$TMPD/$h.ok" ) & done
+  info "proxy in effect: ${https_proxy:-none} (from proxy.env or your shell)"
+  for h in "${hosts[@]}"; do ( if probe_host "$h" > "$TMPD/probe.$h"; then touch "$TMPD/$h.ok"; fi ) & done
   wait
   for h in "${hosts[@]}"; do
-    if [[ -f $TMPD/$h.ok ]]; then info "ok      $h"; else info "BLOCKED $h"; BLOCKED[$h]=1; fi
+    PROBE_RESULT[$h]=$(cat "$TMPD/probe.$h" 2>/dev/null || echo "no answer")
+    if [[ -f $TMPD/$h.ok ]]; then info "ok      $(printf "$PROBE_CMD" "$h") -> ${PROBE_RESULT[$h]}"
+    else info "BLOCKED $(printf "$PROBE_CMD" "$h") -> ${PROBE_RESULT[$h]}"; BLOCKED[$h]=1; fi
   done
 fi
 
 # ---------------------------------------------------------------- run the sections, never stopping on one
 run_section() {   # run_section TOOL
   local tool=$1 h
+  rm -f "$TMPD/last-fail"
   case ${STATE[$tool]} in
     skip*) info "$tool: skipped (${STATE[$tool]#skip })"; return 0 ;;
-    ok)    info "$tool: already installed ($(installed_version "$tool"))"; return 0 ;;
+    ok)    info "$tool: already installed -> ${CHECK_CMD[$tool]:-} -> $(installed_version "$tool")"; return 0 ;;
   esac
   for h in ${TOOL_HOSTS[$tool]:-}; do
     if [[ -n ${BLOCKED[$h]:-} && ${S2_PROBE_SKIP:-N} != Y ]]; then
-      WHY[$tool]="$h unreachable"; warn "$tool: $h is blocked -> skipped, moving on"; return 0
+      WHY[$tool]="$(printf "$PROBE_CMD" "$h") -> ${PROBE_RESULT[$h]}"
+      warn "$tool: skipped, host blocked: ${WHY[$tool]}"; return 0
     fi
   done
-  if ( "section_$tool" ); then
-    info "$tool: done"
+  # run the section in a subshell with errexit switched on *inside* it (bash ignores -e for a subshell that sits
+  # in an if/|| condition, which would let a failed download slip through)
+  local rc
+  set +e
+  ( set -e; "section_$tool" )
+  rc=$?
+  set -e
+  if (( rc == 0 )); then
+    info "$tool: done -> ${CHECK_CMD[$tool]:-} -> $(installed_version "$tool")"
   else
-    WHY[$tool]="install failed or timed out (see the messages above)"; warn "$tool: failed -> moving on"
+    WHY[$tool]=$(cat "$TMPD/last-fail" 2>/dev/null || echo "install failed (see the messages above)")
+    warn "$tool: failed, moving on: ${WHY[$tool]}"
   fi
 }
 
@@ -226,27 +256,33 @@ fi
 summary() {
   local t v state
   printf 'Step 1 summary  %s  host %s\n\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$(hostname)"
-  printf '%-10s %s\n' TOOL STATUS
   for t in "${TOOLS[@]}"; do
     [[ $t == apt ]] && continue
     state=${STATE[$t]}
+    v=$(installed_version "$t")
     if [[ $state == skip* ]]; then
       printf '%-10s skipped (%s)\n' "$t" "${state#skip }"
     elif [[ -n ${WHY[$t]:-} ]]; then
-      v=$(installed_version "$t")
-      if [[ -n $v ]]; then printf '%-10s WRONG VERSION (have %s, want %s) - %s\n' "$t" "$v" "${TOOL_WANT[$t]:-?}" "${WHY[$t]}"
-      else printf '%-10s NOT INSTALLED - %s\n' "$t" "${WHY[$t]}"; fi
+      if [[ -n $v ]]; then printf '%-10s WRONG VERSION  have %s, want %s\n' "$t" "$v" "${TOOL_WANT[$t]:-?}"
+      else printf '%-10s NOT INSTALLED\n' "$t"; fi
+      printf '%-10s failed:  %s\n' '' "${WHY[$t]}"
+      printf '%-10s needs:   %s\n' '' "${TOOL_URL[$t]:-?}"
+    elif [[ -n $v ]]; then
+      printf '%-10s installed      %s\n' "$t" "$v"
+      printf '%-10s works:   %s -> %s\n' '' "${CHECK_CMD[$t]:-}" "$v"
     else
-      v=$(installed_version "$t")
-      if [[ -n $v ]]; then printf '%-10s installed  %s\n' "$t" "$v"; else printf '%-10s NOT INSTALLED - unknown reason\n' "$t"; fi
+      printf '%-10s NOT INSTALLED\n%-10s check:   %s -> command not found\n' "$t" '' "${CHECK_CMD[$t]:-}"
     fi
   done
-  [[ -n ${WHY[apt]:-} ]] && printf '\napt packages: %s\n' "${WHY[apt]}"
-  if (( ${#BLOCKED[@]} )); then
-    printf '\nUNREACHABLE HOSTS (open on 443, or fill in proxy.env):\n'
-    for h in "${!BLOCKED[@]}"; do printf '  - %s\n' "$h"; done
+  [[ -n ${WHY[apt]:-} ]] && printf '\napt packages failed:  %s\n' "${WHY[apt]}"
+  if (( ${#PROBE_RESULT[@]} )); then
+    printf '\nHOSTS PROBED  (%s)\n' "$(printf "$PROBE_CMD" HOST)"
+    for h in "${!PROBE_RESULT[@]}"; do
+      if [[ -n ${BLOCKED[$h]:-} ]]; then printf '  BLOCKED  %-32s %s\n' "$h" "${PROBE_RESULT[$h]}"; else printf '  ok       %-32s %s\n' "$h" "${PROBE_RESULT[$h]}"; fi
+    done | sort
+    (( ${#BLOCKED[@]} )) && printf '  -> blocked hosts must be opened on 443 (or routed via proxy.env); run "bash 99-netdiag.sh" for DNS/proxy/user-vs-root detail\n'
   else
-    printf '\nAll probed hosts were reachable.\n'
+    printf '\nNo downloads were needed, so no hosts were probed.\n'
   fi
   (( DOCKER_GROUP_ADDED )) && printf '\nDocker was installed and you were added to the docker group: log out and back in before step 4.\n'
   return 0
@@ -258,6 +294,7 @@ install -d -m 0700 "$S2CTL_DIR" && install -m 0600 "$TMPD/summary.txt" "$REPORT"
 
 if (( ${#WHY[@]} )); then
   warn "${#WHY[@]} item(s) missing; fix the network (or versions.env) and re-run this step. Already-installed tools are skipped."
+  (( ${#BLOCKED[@]} )) && warn "to see whether it is DNS, a proxy, or user-vs-root, run:  bash 99-netdiag.sh"
   exit 1
 fi
 next "./02-configure.sh"
