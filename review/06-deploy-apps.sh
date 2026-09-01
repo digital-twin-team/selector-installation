@@ -5,7 +5,11 @@
 #   apisix, cert-manager       -> CRDs first, then everything
 #   s2-system                  -> waits for job/openbao-init
 # Usage: 06-deploy-apps.sh [--list] [--only APP] [--from APP] [--timeout SECONDS]
-source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+for _lib in "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh" "$(dirname "${BASH_SOURCE[0]}")/common.sh"; do
+  # shellcheck source=lib/common.sh
+  [[ -f $_lib ]] && { source "$_lib"; break; }
+done
+[[ $(type -t die 2>/dev/null) == function ]] || { echo "ERROR: common.sh not found (expected in lib/ next to this script, or next to it)" >&2; exit 1; }
 load_config
 require_specs
 require_cmd kubectl kustomize helm yq jq

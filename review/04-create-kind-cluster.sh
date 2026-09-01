@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Step 4 - create the local kind cluster (skipped for remote installs): host directories from the vendor's
 # kind config, the GCP key file the node mounts, `kind create cluster`, and the dedicated kubeconfig.
-source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+for _lib in "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh" "$(dirname "${BASH_SOURCE[0]}")/common.sh"; do
+  # shellcheck source=lib/common.sh
+  [[ -f $_lib ]] && { source "$_lib"; break; }
+done
+[[ $(type -t die 2>/dev/null) == function ]] || { echo "ERROR: common.sh not found (expected in lib/ next to this script, or next to it)" >&2; exit 1; }
 load_config
 require_specs
 if [[ $S2_REMOTE_INSTALLATION == Y ]]; then info "remote installation: nothing to do here"; next "./05-prepare-cluster.sh"; exit 0; fi

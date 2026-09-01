@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Step 7 - apply the s2ap application specs into the s2 namespace and wait for the pods.
 # Usage: 07-deploy-s2ap.sh [--wait MINUTES]   (default 30; 0 = apply and return immediately)
-source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+for _lib in "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh" "$(dirname "${BASH_SOURCE[0]}")/common.sh"; do
+  # shellcheck source=lib/common.sh
+  [[ -f $_lib ]] && { source "$_lib"; break; }
+done
+[[ $(type -t die 2>/dev/null) == function ]] || { echo "ERROR: common.sh not found (expected in lib/ next to this script, or next to it)" >&2; exit 1; }
 load_config
 require_specs
 require_cmd kubectl kustomize helm yq jq

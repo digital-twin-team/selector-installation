@@ -3,7 +3,11 @@
 # GCS bucket, extract it, and apply the S2_INSTANCE / S2_NAME / FQDN overrides to config.properties.
 # config.properties is edited as a KEY=VALUE file (never sourced, no sed injection).
 # Set S2_SKIP_SPECS_UPDATE=Y to keep specs that are already on disk.
-source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+for _lib in "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh" "$(dirname "${BASH_SOURCE[0]}")/common.sh"; do
+  # shellcheck source=lib/common.sh
+  [[ -f $_lib ]] && { source "$_lib"; break; }
+done
+[[ $(type -t die 2>/dev/null) == function ]] || { echo "ERROR: common.sh not found (expected in lib/ next to this script, or next to it)" >&2; exit 1; }
 load_config
 require_cmd jq tar sha256sum
 

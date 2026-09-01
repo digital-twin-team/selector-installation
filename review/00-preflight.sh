@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Step 0 - preflight for an Ubuntu VM. Read-only, except for /etc/sysctl.d/99-s2.conf (asks first).
-source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+for _lib in "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh" "$(dirname "${BASH_SOURCE[0]}")/common.sh"; do
+  # shellcheck source=lib/common.sh
+  [[ -f $_lib ]] && { source "$_lib"; break; }
+done
+[[ $(type -t die 2>/dev/null) == function ]] || { echo "ERROR: common.sh not found (expected in lib/ next to this script, or next to it)" >&2; exit 1; }
 
 problems=()
 ok()  { info "ok    $*"; }
@@ -71,8 +75,10 @@ if (( needs_sysctl )); then
 fi
 
 log "Step 0: outbound connectivity"
-for host in packages.cloud.google.com download.docker.com dl.k8s.io github.com kind.sigs.k8s.io get.helm.sh \
-            storage.googleapis.com us-central1-docker.pkg.dev; do
+[[ -n ${https_proxy:-} ]] && info "using proxy from proxy.env: $https_proxy"
+for host in packages.cloud.google.com download.docker.com registry-1.docker.io dl.k8s.io github.com \
+            objects.githubusercontent.com kind.sigs.k8s.io get.helm.sh storage.googleapis.com oauth2.googleapis.com \
+            us-central1-docker.pkg.dev; do
   code=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' "https://$host/" 2>/dev/null || true)
   if [[ -n $code && $code != 000 ]]; then ok "$host (HTTP $code)"; else bad "cannot reach https://$host"; fi
 done

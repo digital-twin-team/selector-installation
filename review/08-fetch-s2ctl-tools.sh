@@ -2,7 +2,11 @@
 # Step 8 (optional) - what `s2ctl.sh gets2mspecs` does: copy the s2ctl binary and get_reports.py out of the
 # running deployment into $S2_BIN_DIR, and the s2ml/services specs into $S2_DEPLOY_DIR/config (git-initialised).
 # The helper pod is always deleted, even when a copy fails.
-source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+for _lib in "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh" "$(dirname "${BASH_SOURCE[0]}")/common.sh"; do
+  # shellcheck source=lib/common.sh
+  [[ -f $_lib ]] && { source "$_lib"; break; }
+done
+[[ $(type -t die 2>/dev/null) == function ]] || { echo "ERROR: common.sh not found (expected in lib/ next to this script, or next to it)" >&2; exit 1; }
 load_config
 require_cmd kubectl git
 

@@ -15,28 +15,83 @@ on its own; `install-all.sh` chains them and `--from N` resumes after a fix.
 | 7 | `07-deploy-s2ap.sh` | Applies s2ap and waits (`--wait MIN`, default 30). |
 | 8 | `08-fetch-s2ctl-tools.sh` | Optional. Pulls the `s2ctl` binary, `get_reports.py` and the s2ml specs out of the running deployment (what `s2ctl.sh gets2mspecs` does). |
 
-## Before you start
+## If you can only commit files (no shell on the VM)
 
-1. `x86_64` Ubuntu 22.04/24.04 VM, a sudo-capable user, run everything from `tmux` (an SSH drop mid-install kills the step).
-2. Vendor files: the service-account JSON key and the GPG key manifest. Defaults are `~/.s2ctl/gcp.json` and `~/.s2ctl/gpg.yaml`.
-3. Inbound 80/443 open, and four DNS records pointing at the VM for `<fqdn>`, `<name>-mon.<domain>`, `<name>-engine.<domain>`, `<name>-registry.<domain>` (step 2 prints them).
-4. Outbound access to the hosts step 0 checks, plus `charts.releases.teleport.dev` / `selector.teleport.sh:443` if you will run the vendor's `teleport` command later.
+Commit exactly this layout to the repo the VM checks out (`lib/common.sh` may also sit flat next to the scripts):
 
-## Run it
-
-```bash
-chmod +x *.sh
-./install-all.sh            # stops after step 1 if you were just added to the docker group
-# log out, log back in
-./install-all.sh --from 2
+```
+00-preflight.sh  01-install-tools.sh  02-configure.sh  03-download-specs.sh  04-create-kind-cluster.sh
+05-prepare-cluster.sh  06-deploy-apps.sh  07-deploy-s2ap.sh  08-fetch-s2ctl-tools.sh
+install-all.sh  versions.env  proxy.env  README.md  lib/common.sh
 ```
 
-Or run the numbered scripts one at a time; each one prints what to run next. Environment knobs:
+Whoever runs them on the VM should run them **as the normal user, never with `sudo` in front** (the steps call
+sudo themselves), and with `bash` so the executable bit doesn't matter:
+
+```bash
+cd <checkout>
+bash install-all.sh            # or one step at a time: bash 00-preflight.sh, bash 01-install-tools.sh, ...
+```
+
+If the VM reaches the internet only through a proxy, put it in `proxy.env` (`https_proxy=http://proxy:3128`) and
+commit that too; every step reads it and passes it to curl, apt, gcloud, the Docker daemon and kind. Step 1 also
+cleans up the half-written apt repo files a failed earlier run leaves behind, so no manual `rm` is needed.
+
+## Quick start (fresh Ubuntu VM)
+
+**1. Copy the bundle to the VM** (from your workstation):
+
+```bash
+scp s2-install.tar.gz <user>@<vm-ip>:~/
+```
+
+**2. Log in to the VM and unpack it.** Use `tmux` so an SSH drop can't kill a step half-way:
+
+```bash
+ssh <user>@<vm-ip>
+tmux
+tar -xzf ~/s2-install.tar.gz
+cd ~/s2-install
+ls            # 00-preflight.sh ... 08-fetch-s2ctl-tools.sh, install-all.sh, lib/, versions.env, README.md
+```
+
+The tarball keeps the executable bits, so no `chmod` is needed. If you downloaded the scripts one by one instead of the
+tarball, recreate the layout by hand (`mkdir -p ~/s2-install/lib`, put `common.sh` in `lib/`) and run
+`chmod +x ~/s2-install/*.sh`.
+
+**3. Put the two vendor files where step 2 expects them** (any path works; these are the defaults it offers):
+
+```bash
+mkdir -p ~/.s2ctl
+cp /path/to/service-account.json ~/.s2ctl/gcp.json
+cp /path/to/gpg-key.yaml         ~/.s2ctl/gpg.yaml
+chmod 600 ~/.s2ctl/*
+```
+
+**4. Run the steps:**
+
+```bash
+./install-all.sh            # runs 00 -> 07; stops after step 1 if it just added you to the docker group
+exit                        # log out of the VM and back in so the docker group applies
+./install-all.sh --from 2   # resumes at step 2
+```
+
+Or run them one at a time (`./00-preflight.sh`, `./01-install-tools.sh`, ...); each one prints what to run next.
+
+## Requirements
+
+1. `x86_64` Ubuntu 22.04/24.04 VM and a user with sudo. Nothing else pre-installed: step 1 installs the apt packages, gcloud, Docker and the pinned kubectl/kind/kustomize/helm/spruce/yaml2json/yq.
+2. The vendor's service-account JSON key and GPG key manifest (see step 3 above).
+3. Inbound 80/443 open, and four DNS records pointing at the VM for `<fqdn>`, `<name>-mon.<domain>`, `<name>-engine.<domain>`, `<name>-registry.<domain>` (step 2 prints the exact names).
+4. Outbound access to the hosts step 0 checks, plus `charts.releases.teleport.dev` / `selector.teleport.sh:443` if you will run the vendor's `teleport` command later.
+
+## Environment knobs
 
 - `S2_NONINTERACTIVE=Y` accepts defaults/environment values in step 2 without prompting; `YES_TO_ALL=Y` answers the yes/no prompts (never the typed "wrong cluster" confirmation).
 - `S2_GCP_KEY`, `S2_GPG_KEY`, `S2_DEPLOY_DIR`, `S2_FQDN`, `S2_NAME`, `S2_INSTANCE`, `S2_REMOTE_INSTALLATION=Y`, `S2_KUBE_CONTEXT` pre-seed step 2.
 - `S2_SKIP_SPECS_UPDATE=Y` keeps specs already on disk in step 3.
 - `S2CTL_CONFIG=/path/config` moves the config directory (kubeconfig and the key mount live next to it).
+- `proxy.env` (next to the scripts): `http_proxy`, `https_proxy`, `no_proxy` for VMs without direct egress.
 
 ## After install
 

@@ -3,6 +3,7 @@
 # Each step is idempotent, so re-running a finished step is harmless.
 set -Eeuo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+[[ -f lib/common.sh ]] || { echo "ERROR: lib/common.sh is missing next to the step scripts (unpack the tarball, or mkdir lib && mv common.sh lib/)" >&2; exit 1; }
 
 from=0
 while [[ $# -gt 0 ]]; do

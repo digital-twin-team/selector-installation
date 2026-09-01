@@ -3,7 +3,11 @@
 # kubectl/kind/kustomize/helm/spruce/yaml2json/yq binaries from versions.env.
 # Downloads go to a private temp dir, are checksum-verified where the publisher ships checksums, and are
 # installed root-owned with `install`. Re-running is safe: tools already at the pinned version are skipped.
-source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+for _lib in "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh" "$(dirname "${BASH_SOURCE[0]}")/common.sh"; do
+  # shellcheck source=lib/common.sh
+  [[ -f $_lib ]] && { source "$_lib"; break; }
+done
+[[ $(type -t die 2>/dev/null) == function ]] || { echo "ERROR: common.sh not found (expected in lib/ next to this script, or next to it)" >&2; exit 1; }
 load_versions
 
 BINARIES_ONLY=0   # --binaries-only: skip apt/gcloud/docker, only (re)install the pinned binaries
@@ -33,6 +37,9 @@ if (( BINARIES_ONLY )); then
   DOCKER_GROUP_ADDED=0
 else
 log "Step 1: apt packages"
+# a previous failed run may have left half-written repo files behind; drop the ones this step recreates
+command -v gcloud >/dev/null 2>&1 || "${SUDO[@]}" rm -f /etc/apt/sources.list.d/google-cloud-sdk.list
+command -v docker >/dev/null 2>&1 || "${SUDO[@]}" rm -f /etc/apt/sources.list.d/docker.list
 "${SUDO[@]}" apt-get update -q
 "${SUDO[@]}" apt-get install -y -q apt-transport-https ca-certificates gnupg sed tar gawk jq curl lsb-release git coreutils
 
@@ -64,6 +71,15 @@ else
   "${SUDO[@]}" apt-get install -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   "${SUDO[@]}" usermod -aG docker "$(id -un)"
   DOCKER_GROUP_ADDED=1
+fi
+proxy_https=${https_proxy:-${HTTPS_PROXY:-}}
+if [[ -n $proxy_https && $REMOTE != Y ]] && command -v docker >/dev/null 2>&1; then
+  "${SUDO[@]}" install -d -m 0755 /etc/systemd/system/docker.service.d
+  printf '[Service]\nEnvironment="HTTPS_PROXY=%s"\nEnvironment="HTTP_PROXY=%s"\nEnvironment="NO_PROXY=%s"\n' \
+    "$proxy_https" "${http_proxy:-${HTTP_PROXY:-$proxy_https}}" "${no_proxy:-${NO_PROXY:-localhost,127.0.0.1}}" \
+    | "${SUDO[@]}" tee /etc/systemd/system/docker.service.d/http-proxy.conf >/dev/null
+  "${SUDO[@]}" systemctl daemon-reload && "${SUDO[@]}" systemctl restart docker
+  info "Docker daemon proxy configured from proxy.env"
 fi
 fi
 

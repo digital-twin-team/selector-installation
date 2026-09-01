@@ -11,7 +11,9 @@
 
 set -Eeuo pipefail
 
-S2_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+_here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ${_here##*/} == lib ]]; then S2_SCRIPTS_DIR="${_here%/*}"; else S2_SCRIPTS_DIR="$_here"; fi   # lib/ or flat layout
+unset _here
 S2CTL_CONFIG="${S2CTL_CONFIG:-$HOME/.s2ctl/config}"
 S2CTL_DIR="$(dirname "$S2CTL_CONFIG")"
 export KUBECONFIG="$S2CTL_DIR/kubeconfig"
@@ -24,7 +26,12 @@ CONFIG_KEYS=(s2_gcp_key s2_gpg_key s2_deploy_dir s2_deployment_name s2_remote_in
              s2_bin_dir s2_fqdn s2_kube_context s2_kind_cluster_name s2_store_mode s2_log_path s2_stores_path
              s2_coredns_config)
 
-if [[ $EUID -eq 0 ]]; then SUDO=(); else SUDO=(sudo); fi
+if [[ -n ${SUDO_USER:-} ]]; then
+  printf 'ERROR: run this as your normal user (%s), not with sudo in front; the steps call sudo themselves where needed.\n' "$SUDO_USER" >&2
+  exit 1
+fi
+PROXY_VARS=(http_proxy https_proxy no_proxy HTTP_PROXY HTTPS_PROXY NO_PROXY)
+if [[ $EUID -eq 0 ]]; then SUDO=(); else SUDO=(sudo --preserve-env="$(IFS=,; echo "${PROXY_VARS[*]}")"); fi
 if [[ -t 1 ]]; then BOLD=$'\e[1m' RED=$'\e[31m' YELLOW=$'\e[33m' NC=$'\e[0m'; else BOLD='' RED='' YELLOW='' NC=''; fi
 
 log()  { printf '\n%s==> %s%s\n' "$BOLD" "$*" "$NC"; }
@@ -252,3 +259,13 @@ ensure_pull_secret() {
   done
   kctl -n "$ns" patch serviceaccount default -p '{"imagePullSecrets":[{"name":"s2-regcred"}]}' >/dev/null
 }
+
+# ---------------------------------------------------------------- optional proxy (proxy.env next to the scripts)
+# Exported here for curl/gcloud/kind, passed through sudo to apt (see SUDO above); step 1 gives the Docker daemon a
+# matching drop-in. Leave the file empty (or absent) when the VM has direct egress.
+_pf="$S2_SCRIPTS_DIR/proxy.env"
+for _k in http_proxy https_proxy no_proxy; do
+  _v=$(get_kv "$_pf" "$_k" || true)
+  if [[ -n $_v ]]; then export "$_k=$_v" "${_k^^}=$_v"; fi
+done
+unset _pf _k _v

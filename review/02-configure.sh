@@ -3,7 +3,11 @@
 # Precedence: environment variable (S2_GCP_KEY, S2_GPG_KEY, S2_DEPLOY_DIR, S2_FQDN, ...) > existing config > prompt.
 # Set S2_NONINTERACTIVE=Y to accept every default/environment value without prompting.
 # The file uses the vendor's keys, so `s2ctl.sh upgrade` / `applyConfig` keep working after this installer.
-source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+for _lib in "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh" "$(dirname "${BASH_SOURCE[0]}")/common.sh"; do
+  # shellcheck source=lib/common.sh
+  [[ -f $_lib ]] && { source "$_lib"; break; }
+done
+[[ $(type -t die 2>/dev/null) == function ]] || { echo "ERROR: common.sh not found (expected in lib/ next to this script, or next to it)" >&2; exit 1; }
 require_cmd jq yq kubectl
 umask 077
 install -d -m 0700 "$S2CTL_DIR"

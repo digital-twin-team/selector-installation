@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Step 5 - verify the target cluster is the one you mean, then create the namespaces, the GPG key secret
 # (s2 and s2-system), the registry pull secret in every app namespace, and optionally a custom CoreDNS config.
-source "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
+for _lib in "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh" "$(dirname "${BASH_SOURCE[0]}")/common.sh"; do
+  # shellcheck source=lib/common.sh
+  [[ -f $_lib ]] && { source "$_lib"; break; }
+done
+[[ $(type -t die 2>/dev/null) == function ]] || { echo "ERROR: common.sh not found (expected in lib/ next to this script, or next to it)" >&2; exit 1; }
 load_config
 require_specs
 require_cmd kubectl yq jq
