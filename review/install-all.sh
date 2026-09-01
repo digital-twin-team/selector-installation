@@ -21,7 +21,10 @@ for step in "${steps[@]}"; do
   n=$(( 10#${step%%-*} ))
   (( n < from )) && continue
   printf '\n################ %s ################\n' "$step"
-  bash "./$step"
+  if ! bash "./$step"; then
+    printf '\nStopped at %s. Fix the problem reported above, then resume with:  %s --from %s\n' "$step" "$0" "$n"
+    exit 1
+  fi
   if [[ $step == 01-install-tools.sh ]] && command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
     cat <<EOF
 

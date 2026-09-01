@@ -6,7 +6,7 @@ on its own; `install-all.sh` chains them and `--from N` resumes after a fix.
 | Step | Script | What it does |
 |------|--------|--------------|
 | 0 | `00-preflight.sh` | Arch/OS/sudo/terminal checks, RAM/disk/CPU report, apt lock, snap-docker check, kernel sysctls (asks before writing), outbound reachability. |
-| 1 | `01-install-tools.sh` | apt packages, gcloud CLI, docker-ce (adds you to the `docker` group), pinned kubectl/kind/kustomize/helm/spruce/yaml2json/yq with checksum verification. |
+| 1 | `01-install-tools.sh` | apt packages, gcloud CLI, docker-ce (adds you to the `docker` group), pinned kubectl/kind/kustomize/helm/spruce/yaml2json/yq with checksum verification. Best-effort: probes the download hosts first, skips tools whose host is blocked or whose install fails, and ends with a summary of installed / missing tools and unreachable hosts (also saved to `~/.s2ctl/install-report.txt`). Re-run after fixing the network; installed tools are skipped. |
 | 2 | `02-configure.sh` | Key paths, deploy dir, FQDN and overrides -> `~/.s2ctl/config` (0600). Copies the GCP key to the path the kind node mounts. For remote installs, isolates the target context into `~/.s2ctl/kubeconfig`. |
 | 3 | `03-download-specs.sh` | Service-account login, downloads and extracts the specs tarball from the vendor bucket, applies `S2_INSTANCE` / `S2_NAME` / FQDN ingress-domain overrides to `config.properties`. |
 | 4 | `04-create-kind-cluster.sh` | Host directories from the vendor kind config, `kind create cluster`, dedicated kubeconfig. Skipped for remote installs. |
@@ -36,6 +36,20 @@ bash install-all.sh            # or one step at a time: bash 00-preflight.sh, ba
 If the VM reaches the internet only through a proxy, put it in `proxy.env` (`https_proxy=http://proxy:3128`) and
 commit that too; every step reads it and passes it to curl, apt, gcloud, the Docker daemon and kind. Step 1 also
 cleans up the half-written apt repo files a failed earlier run leaves behind, so no manual `rm` is needed.
+
+## Blocked egress, proxies and offline specs
+
+Step 0 lists every host the install needs; step 1 and step 3 re-check the ones they are about to use and stop
+within seconds naming the blocked host (instead of hanging in a connect timeout). Three ways out:
+
+- **Allowlist** (ask the network team to open 443 to): `packages.cloud.google.com`, `download.docker.com`,
+  `registry-1.docker.io`, `dl.k8s.io`, `cdn.dl.k8s.io`, `github.com`, `objects.githubusercontent.com`,
+  `kind.sigs.k8s.io`, `get.helm.sh`, `storage.googleapis.com`, `oauth2.googleapis.com`, `www.googleapis.com`,
+  `us-central1-docker.pkg.dev`, plus `charts.releases.teleport.dev` and `selector.teleport.sh` for Teleport.
+- **Proxy**: fill in `proxy.env`; every step passes it to curl, apt, gcloud, the Docker daemon and kind.
+- **Offline specs**: if the vendor gives you the `<deployment-name>.tgz` directly, place it next to the scripts (or
+  set `S2_SPECS_TARBALL=/path/to/it`) and run step 1 with `S2_SKIP_GCLOUD=Y`; step 3 then unpacks it without gcloud.
+  This does **not** remove the need for `us-central1-docker.pkg.dev`: the cluster pulls every image from there.
 
 ## Quick start (fresh Ubuntu VM)
 
